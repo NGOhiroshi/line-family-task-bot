@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Node (clasp等を使う場合)
+node_modules/
+.clasp.json
+
+# Environment
+.env
+.env.local
+
+# Claude Code
+.claude/
