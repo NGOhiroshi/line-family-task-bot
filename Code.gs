@@ -1,14 +1,12 @@
 /**
- * 夫婦向け 家事・タスク管理 LINE Bot v3
+ * 夫婦向け 家事・タスク管理 LINE Bot v4
  * 
- * v3 変更点:
- * - 「完了」だけ打つとクイックリプライボタン付きでToDo一覧表示（タップで完了）
- * - 番号入力での完了にも対応（半角・全角）
- * - 「完了 xxx」の全角スペースも許容
- * - 朝のToDo一覧に期日なしアイテムも表示
+ * v4 変更点:
+ * - 出社在宅管理機能追加
  *
  * スプレッドシート構成:
  *   シート1: CustomTodos  (名前/登録者/登録日時/期日/完了フラグ/完了者/完了日時)
+ * 　シート２: WorkSchedule  (Id/名前/週開始日/月/火/水/木/金)
  */
 
 // ========== 設定 ==========
@@ -45,6 +43,7 @@ const DAYTIME_FLOW = [
 const DAY_SPECIFIC_FLOW = {
   2: ['🗑️ ゴミ捨て（燃えるゴミ）'],
   5: ['🗑️ ゴミ捨て（缶・ペット）', '🛏️ 保育園 布団入れ替え'],
+  6: ['🗑️ ゴミ捨て（燃えるゴミ）'],
 };
 
 // ========== LINE Webhook エントリーポイント ==========
@@ -130,6 +129,23 @@ function handleMessage(event) {
     const taskName = text.substring(3).trim();
     replyMessage(replyToken, deleteTodo(taskName));
   }
+  else if (text === '予定') {
+    replyMessage(replyToken, showWorkSchedule());
+  }
+  else if (text.startsWith('勤務確定:')) {
+    const parts = text.split(':');
+    if (parts.length >= 4) {
+      const weekType = parts[1];
+      const status = parts[2];
+      const dayChars = parts[3];
+      replyMessage(replyToken, confirmWorkSchedule(userId, userName, status, dayChars, weekType));
+    }
+  }
+  else if (text.startsWith('出社') || text.startsWith('在宅') || text.startsWith('出張') || text.startsWith('休暇')) {
+    const status = text.substring(0, 2);
+    const dateArgs = text.substring(2).replace(/^\s+/, '');
+    handleWorkScheduleInput(replyToken, userId, userName, status, dateArgs);
+  }
   else {
     // 番号入力（半角・全角対応）→ ToDo完了
     const numStr = zenkakuToHankaku(text);
@@ -188,6 +204,235 @@ function showCompletionPicker(replyToken) {
   replyWithQuickReply(replyToken, msg, quickReplyItems);
 }
 
+// ========== 出社在宅管理 ==========
+const STATUS_ICONS = {'出社': '🏢', '在宅': '🏠', '出張': '✈️', '休暇': '🌴'};
+const DAY_LABELS = ['月', '火', '水', '木', '金'];
+
+function getMonday(date) {
+  const d = new Date(date);
+  const day = parseInt(Utilities.formatDate(d, TIMEZONE, 'u'));
+  const adjusted = day === 7 ? 0 : day;
+  const diff = adjusted - 1;
+  const monday = new Date(d.getTime() - diff * 86400000);
+  return Utilities.formatDate(monday, TIMEZONE, 'yyyy-MM-dd');
+}
+
+function toWeekStartString(val) {
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, TIMEZONE, 'yyyy-MM-dd');
+  }
+  return String(val);
+}
+
+function isDayCharsOnly(str) {
+  const dayMap = {'月': 1, '火': 2, '水': 3, '木': 4, '金': 5, '土': 6, '日': 7};
+  const chars = str.replace(/\s+/g, '');
+  if (chars.length === 0) return false;
+  for (let i = 0; i < chars.length; i++) {
+    if (!dayMap[chars[i]]) return false;
+  }
+  return true;
+}
+
+function getWeekLabel(weekOffset) {
+  const now = new Date();
+  const monday = new Date(now.getTime() + (weekOffset * 7) * 86400000);
+  const mondayStr = getMonday(monday);
+  const mondayDate = new Date(mondayStr.replace(/-/g, '/'));
+  const fridayDate = new Date(mondayDate.getTime() + 4 * 86400000);
+  const fromStr = Utilities.formatDate(mondayDate, TIMEZONE, 'M/d');
+  const toStr = Utilities.formatDate(fridayDate, TIMEZONE, 'M/d');
+  return `${fromStr}〜${toStr}`;
+}
+
+function handleWorkScheduleInput(replyToken, userId, userName, status, dateArgs) {
+  if (!dateArgs) {
+    replyMessage(replyToken, registerWorkScheduleDirect(userId, userName, status, [new Date()]));
+    return;
+  }
+
+  if (isDayCharsOnly(dateArgs)) {
+    const dayChars = dateArgs.replace(/\s+/g, '');
+    showWeekPicker(replyToken, status, dayChars);
+    return;
+  }
+
+  const dates = [];
+  const parts = dateArgs.split(/\s+/);
+  for (const part of parts) {
+    const parsed = parseDate(part);
+    if (parsed) {
+      const [y, m, d] = parsed.split('-').map(Number);
+      dates.push(new Date(y, m - 1, d));
+    }
+  }
+  if (dates.length === 0) dates.push(new Date());
+  replyMessage(replyToken, registerWorkScheduleDirect(userId, userName, status, dates));
+}
+
+function showWeekPicker(replyToken, status, dayChars) {
+  const icon = STATUS_ICONS[status] || '';
+  const dayDisplay = dayChars.split('').join('・');
+  const msg = `${icon}「${status}」を ${dayDisplay} に登録するよ\nどの週？`;
+
+  const quickReplyItems = [
+    {
+      type: 'action',
+      action: { type: 'message', label: `今週（${getWeekLabel(0)}）`, text: `勤務確定:今週:${status}:${dayChars}` }
+    },
+    {
+      type: 'action',
+      action: { type: 'message', label: `来週（${getWeekLabel(1)}）`, text: `勤務確定:来週:${status}:${dayChars}` }
+    },
+    {
+      type: 'action',
+      action: { type: 'message', label: `再来週（${getWeekLabel(2)}）`, text: `勤務確定:再来週:${status}:${dayChars}` }
+    },
+  ];
+
+  replyWithQuickReply(replyToken, msg, quickReplyItems);
+}
+
+function confirmWorkSchedule(userId, userName, status, dayChars, weekType) {
+  const weekOffsets = {'今週': 0, '来週': 1, '再来週': 2};
+  const offset = weekOffsets[weekType];
+  if (offset === undefined) return '⚠️ 週の指定が不正です';
+
+  const dayMap = {'月': 1, '火': 2, '水': 3, '木': 4, '金': 5};
+  const now = new Date();
+  const mondayStr = getMonday(now);
+  const mondayDate = new Date(mondayStr.replace(/-/g, '/'));
+  const baseMon = new Date(mondayDate.getTime() + offset * 7 * 86400000);
+
+  const dates = [];
+  for (let i = 0; i < dayChars.length; i++) {
+    const targetDay = dayMap[dayChars[i]];
+    if (!targetDay) continue;
+    dates.push(new Date(baseMon.getTime() + (targetDay - 1) * 86400000));
+  }
+
+  if (dates.length === 0) return '⚠️ 平日（月〜金）を指定してね';
+  return registerWorkScheduleDirect(userId, userName, status, dates);
+}
+
+function registerWorkScheduleDirect(userId, userName, status, dates) {
+  const sheet = getSheet('WorkSchedule');
+  const data = sheet.getDataRange().getValues();
+  const updatedDays = [];
+
+  for (const date of dates) {
+    const weekStart = getMonday(date);
+    const dayOfWeek = parseInt(Utilities.formatDate(date, TIMEZONE, 'u'));
+    if (dayOfWeek < 1 || dayOfWeek > 5) continue;
+    const colIndex = dayOfWeek - 1 + 3;
+
+    let rowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === userId && toWeekStartString(data[i][2]) === weekStart) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      const newRow = [userId, userName, weekStart, '', '', '', '', ''];
+      newRow[colIndex] = status;
+      sheet.appendRow(newRow);
+      data.push(newRow);
+    } else {
+      sheet.getRange(rowIndex, colIndex + 1).setValue(status);
+      data[rowIndex - 1][colIndex] = status;
+    }
+
+    const dayLabel = DAY_LABELS[dayOfWeek - 1];
+    const dateStr = Utilities.formatDate(date, TIMEZONE, 'M/d');
+    updatedDays.push(`${dateStr}(${dayLabel})`);
+  }
+
+  if (updatedDays.length === 0) return '⚠️ 平日（月〜金）を指定してね';
+
+  const icon = STATUS_ICONS[status] || '';
+  return `${icon} ${userName}さんの予定を更新\n${status}: ${updatedDays.join(', ')}`;
+}
+
+function showWorkSchedule() {
+  const now = new Date();
+  const thisWeekStart = getMonday(now);
+  const thisMonday = new Date(thisWeekStart.replace(/-/g, '/'));
+  const nextMonday = new Date(thisMonday.getTime() + 7 * 86400000);
+  const nextWeekStart = Utilities.formatDate(nextMonday, TIMEZONE, 'yyyy-MM-dd');
+
+  const sheet = getSheet('WorkSchedule');
+  const data = sheet.getDataRange().getValues();
+
+  let msg = '';
+  const weeks = [
+    {label: '今週', weekStart: thisWeekStart, monday: thisMonday},
+    {label: '来週', weekStart: nextWeekStart, monday: nextMonday},
+  ];
+
+  for (const week of weeks) {
+    const rows = [];
+    for (let i = 1; i < data.length; i++) {
+      if (toWeekStartString(data[i][2]) === week.weekStart) {
+        rows.push(data[i]);
+      }
+    }
+
+    const fridayDate = new Date(week.monday.getTime() + 4 * 86400000);
+    const fromStr = Utilities.formatDate(week.monday, TIMEZONE, 'M/d');
+    const toStr = Utilities.formatDate(fridayDate, TIMEZONE, 'M/d');
+
+    msg += `📅 ${week.label}（${fromStr}〜${toStr}）\n`;
+    msg += `        月   火   水   木   金\n`;
+
+    if (rows.length === 0) {
+      msg += '  まだ登録なし\n';
+    } else {
+      for (const row of rows) {
+        let name = String(row[1]);
+        const padding = '　'.repeat(Math.max(0, 3 - name.length));
+        msg += name + padding;
+        for (let d = 0; d < 5; d++) {
+          const st = row[d + 3] ? String(row[d + 3]) : '';
+          const icon = STATUS_ICONS[st] || '  ー ';
+          msg += ` ${icon}`;
+        }
+        msg += '\n';
+      }
+    }
+    msg += '\n';
+  }
+
+  msg += '🏢出社 🏠在宅 ✈️出張 🌴休暇\n';
+  msg += '「出社 月火水」のように登録できるよ';
+  return msg;
+}
+
+function getTodayWorkStatus() {
+  const now = new Date();
+  const dayOfWeek = parseInt(Utilities.formatDate(now, TIMEZONE, 'u'));
+  if (dayOfWeek < 1 || dayOfWeek > 5) return '';
+
+  const weekStart = getMonday(now);
+  const sheet = getSheet('WorkSchedule');
+  const data = sheet.getDataRange().getValues();
+  const colIndex = dayOfWeek - 1 + 3;
+
+  const statuses = [];
+  for (let i = 1; i < data.length; i++) {
+    if (toWeekStartString(data[i][2]) === weekStart && data[i][colIndex]) {
+      const name = String(data[i][1]);
+      const st = String(data[i][colIndex]);
+      const icon = STATUS_ICONS[st] || '';
+      statuses.push(`${name}: ${icon}${st}`);
+    }
+  }
+
+  if (statuses.length === 0) return '';
+  return '\n【🏢 今日の勤務】\n  ' + statuses.join('\n  ') + '\n';
+}
+
 // ========== 今日の流れ表示 ==========
 function showTodayFlow() {
   const now = new Date();
@@ -216,6 +461,8 @@ function showTodayFlow() {
     msg += '\n【📌 今日限定】\n';
     DAY_SPECIFIC_FLOW[dayOfWeek].forEach(t => msg += `  ${t}\n`);
   }
+
+  msg += getTodayWorkStatus();
 
   // すべてのアクティブToDo
   const todos = getActiveTodos();
@@ -443,6 +690,15 @@ function helpMessage() {
 🗑️ 削除 〇〇
    → ToDoを削除
 
+━━━━━━━━━━━━━━
+🏢 出社 / 在宅 / 出張 / 休暇
+   + 曜日（例: 出社 月火水）
+   + 日付（例: 在宅 5/12）
+   → 勤務予定を登録
+
+📅 予定
+   → 今週の夫婦の勤務予定
+
 ❓ ヘルプ`;
 }
 
@@ -521,6 +777,8 @@ function getSheet(name) {
     sheet = ss.insertSheet(name);
     if (name === 'CustomTodos') {
       sheet.appendRow(['TaskName', 'AddedBy', 'AddedAt', 'DueDate', 'IsDone', 'DoneBy', 'DoneAt']);
+    } else if (name === 'WorkSchedule') {
+      sheet.appendRow(['UserId', 'UserName', 'WeekStart', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
     }
   }
   return sheet;
@@ -543,6 +801,7 @@ function morningPush() {
 // ========== 初期セットアップ ==========
 function setup() {
   getSheet('CustomTodos');
+  getSheet('WorkSchedule');
   console.log('セットアップ完了');
 }
 

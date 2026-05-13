@@ -9,6 +9,7 @@
 - **毎朝自動通知** — 今日の家事フローとToDoを朝7時にプッシュ
 - **期日管理** — 超過・今日・今後を色分け表示
 - **曜日別タスク** — ゴミ出しなど曜日固有のタスクを自動表示
+- **出社在宅管理** — 夫婦の勤務予定を週単位で共有
 - **完全無料** — Google Apps Script + LINE Messaging API 無料枠で運用
 
 ## コマンド一覧
@@ -21,6 +22,12 @@
 | `完了` | ボタン付き一覧から選んで完了 |
 | `完了 〇〇` | 名前指定で完了 |
 | `削除 〇〇` | タスクを削除 |
+| **勤務予定** | |
+| `出社 月火水` | 指定曜日を出社に登録（週選択あり） |
+| `在宅 木金` | 指定曜日を在宅に登録 |
+| `出張 水` / `休暇 金` | 出張・休暇も同様 |
+| `予定` | 今週・来週の勤務予定を表示 |
+| **その他** | |
 | `ヘルプ` | コマンド一覧表示 |
 
 ### 期日の指定方法
@@ -40,7 +47,9 @@ LINE App
   ↕ Messaging API (Webhook)
 Google Apps Script (Code.gs)
   ↕ SpreadsheetApp
-Google Spreadsheet (CustomTodos シート)
+Google Spreadsheet
+  ├ CustomTodos シート（ToDo管理）
+  └ WorkSchedule シート（勤務予定）
 ```
 
 ## セットアップ
@@ -110,9 +119,23 @@ const DAY_SPECIFIC_FLOW = {
 | F: DoneBy | 完了者 |
 | G: DoneAt | 完了日時 |
 
+### WorkSchedule シート
+
+| 列 | 内容 |
+|----|------|
+| A: UserId | LINE userId |
+| B: UserName | 表示名 |
+| C: WeekStart | 週の月曜日（yyyy-MM-dd） |
+| D: Mon | 月曜のステータス |
+| E: Tue | 火曜 |
+| F: Wed | 水曜 |
+| G: Thu | 木曜 |
+| H: Fri | 金曜 |
+
+ステータス: `出社` / `在宅` / `出張` / `休暇`
+
 ## 今後の拡張アイデア
 
-- 在宅出社情報共有
 - 週次レポート（夫婦の完了件数集計）
 - 夜までに未完了タスクのリマインダー
 - 買い物リスト機能

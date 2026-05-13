@@ -13,6 +13,10 @@
 - `SETUP.md` — セットアップ手順書
 - `LICENSE` — MIT License
 
+## スプレッドシート構成
+- `CustomTodos` — ToDoタスク管理（1行=1タスク）
+- `WorkSchedule` — 出社在宅予定（1行=1人1週間分、列: UserId/UserName/WeekStart/Mon〜Fri）
+
 ## 開発時の注意
 - GASはブラウザ上のエディタまたはclaspで編集する。このリポジトリの`Code.gs`が正とする
 - スクリプトプロパティ (`CHANNEL_ACCESS_TOKEN`, `SPREADSHEET_ID`, `ALLOWED_USER_IDS`) は秘匿情報。コードにハードコードしない
